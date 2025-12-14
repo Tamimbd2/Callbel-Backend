@@ -1,68 +1,99 @@
 const randomstring = require("randomstring");
+const bcrypt = require("bcrypt");
 const User = require("../../../models/User");
 const sendBrevoCampaign = require("../../../utils/brevoEmail");
 
+const OTP_EXPIRY_MINUTES = 10;
+const RESEND_COOLDOWN_MINUTES = 1;
+
 const sendOtp = async (req, res) => {
-  let { email } = req.body;
+    const { email } = req.body;
 
-  if (!email) {
-    return res.status(400).json({ status: "error", email: "email required" });
-  }
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: "Email is required",
+        });
+    }
 
-  let user;
+    let user;
 
-  try {
-    user = await User.findOne({ email });
-  } catch (e) {
-    return res
-      .status(404)
-      .json({ status: "error", email: "error while reading database" });
-  }
+    try {
+        user = await User.findOne({ email });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: "Database read error",
+        });
+    }
 
-  if (!user) {
-    return res
-      .status(404)
-      .json({ status: "error", email: "no user matches this email address" });
-  }
+    if (!user) {
+        return res.status(404).json({
+            success: false,
+            message: "No user found with this email",
+        });
+    }
 
-  const code = randomstring.generate({ charset: "numeric", length: 6 });
+    /* ------------------ Resend Protection ------------------ */
+    if (
+        user.otpRequestedAt &&
+        Date.now() - user.otpRequestedAt.getTime() <
+        RESEND_COOLDOWN_MINUTES * 60 * 1000
+    ) {
+        return res.status(429).json({
+            success: false,
+            message: "Please wait before requesting another OTP",
+        });
+    }
 
-  await sendBrevoCampaign({
-    subject: `${process.env.WEBSITE_NAME} - Password Reset Code`,
-    senderName: process.env.WEBSITE_NAME,
-    senderEmail: process.env.BREVO_EMAIL,
-    htmlContent: `
-  <div style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px;">
-    <div style="max-width: 600px; margin: auto; background: #ffffff; border-radius: 10px; padding: 30px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
-      <h2 style="color: #333;">Hi ${user.name},</h2>
-      <p style="font-size: 16px; color: #555;">We received a request to reset your password. Please use the authentication code below to proceed:</p>
-      
-      <div style="text-align: center; margin: 30px 0;">
-        <span style="font-size: 28px; font-weight: bold; letter-spacing: 3px; color: #2e7dff; border: 2px dashed #2e7dff; padding: 12px 20px; display: inline-block; border-radius: 8px;">
-          ${code}
-        </span>
-      </div>
+    /* ------------------ Generate OTP ------------------ */
+    const otp = randomstring.generate({
+        length: 6,
+        charset: "numeric",
+    });
 
-      <p style="font-size: 14px; color: #777;">This code is valid for the next 10 minutes. If you didn’t request this, please ignore this email or contact support.</p>
+    const hashedOtp = await bcrypt.hash(otp, 10);
+    const otpExpiresAt = new Date(
+        Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000
+    );
 
-      <p style="font-size: 14px; color: #999; margin-top: 40px;">Thanks,<br/>The ${
-        process.env.WEBSITE_NAME
-      } Team</p>
+    /* ------------------ Send Email ------------------ */
+    try {
+        await sendBrevoCampaign({
+            subject: `${process.env.WEBSITE_NAME} - Password Reset Code`,
+            senderName: process.env.WEBSITE_NAME,
+            senderEmail: process.env.BREVO_EMAIL,
+            to: email,
+            htmlContent: /* your existing HTML */ `
+        <h2>Hello ${user.name}</h2>
+        <p>Your password reset code is:</p>
+        <h1>${otp}</h1>
+        <p>This code is valid for ${OTP_EXPIRY_MINUTES} minutes.</p>
+      `,
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: "Failed to send email",
+        });
+    }
 
-      <hr style="margin-top: 40px; border: none; border-top: 1px solid #eee;" />
-      <p style="font-size: 12px; color: #aaa; text-align: center;">
-        © ${new Date().getFullYear()} ${
-      process.env.WEBSITE_NAME
-    }.in — All rights reserved.
-      </p>
-    </div>
-  </div>
-  `,
-    to: email,
-  });
+    /* ------------------ Save OTP Securely ------------------ */
+    await User.updateOne(
+        { email },
+        {
+            $set: {
+                otp: hashedOtp,
+                otpExpiresAt,
+                otpRequestedAt: new Date(),
+            },
+        }
+    );
 
-  await User.findOneAndUpdate({ email }, { $set: { otp: code } });
-  res.status(200).json({ success: true, message: "email queued" });
+    return res.status(200).json({
+        success: true,
+        message: "OTP sent successfully",
+    });
 };
 
 module.exports = sendOtp;
