@@ -40,10 +40,14 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: "",
   },
-  fcmToken: {
-    type: String,
-    default: "",
-  },
+  fcmTokens: [
+    {
+      token: { type: String, required: true },
+      deviceType: { type: String, enum: ['mobile', 'web'], required: true },
+      deviceId: { type: String }, // Optional: Browser ID or Device ID for uniqueness
+      updatedAt: { type: Date, default: Date.now }
+    }
+  ],
   transactionHistory: [
     {
       amount: { type: Number },

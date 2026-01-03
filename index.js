@@ -97,46 +97,70 @@ io.on("connection", (socket) => {
     // 2. Notify via FCM (Background / Killed)
     const receiver = await User.findById(to);
 
-    if (!receiver || !receiver.fcmToken) {
-      console.log("❌ Push skipped: No FCM token for user", to);
+    if (!receiver || !receiver.fcmTokens || receiver.fcmTokens.length === 0) {
+      console.log("❌ Push skipped: No FCM tokens for user", to);
     } else {
+      console.log(`📱 Sending notifications to ${receiver.fcmTokens.length} device(s)`);
       
-      // ✅ UPDATED: Include both notification and data for better handling
-      const message = {
-        token: receiver.fcmToken,
+      // Send to all registered devices
+      const notificationPromises = receiver.fcmTokens.map(async (deviceToken) => {
+        const message = {
+          token: deviceToken.token,
 
-        // ✅ Notification shown in system tray (tappable)
-        notification: {
-          title: "📞 Incoming Call",
-          body: `${from} is calling...`,
-        },
-
-        android: {
-          priority: "high",
-          ttl: 0, // 0 = Deliver immediately or drop (don't ring 20 mins later)
+          // ✅ Notification shown in system tray (tappable)
           notification: {
-            channelId: "call_channel", // Must match the Android channel created in Flutter
-            priority: "max",
-            defaultVibrateTimings: true,
-          }
-        },
+            title: "📞 Incoming Call",
+            body: `${from} is calling...`,
+          },
 
-        data: {
-          type: "incoming_call",
-          callerName: from,              // Renamed from from_user
-          roomName: roomName,            // Renamed from room_id
-          guestSocketId: socket.id,      // 👈 CRITICAL: Needed to Accept the call
-          uuid: Date.now().toString(),   // Unique ID for the call
-          avatar: "https://i.pravatar.cc/300" // Optional: Dummy avatar
-        },
-      };
+          android: {
+            priority: "high",
+            ttl: 0,
+            notification: {
+              channelId: "call_channel",
+              priority: "max",
+              defaultVibrateTimings: true,
+            }
+          },
 
-      try {
-        await admin.messaging().send(message);
-        console.log("✅ Incoming call Data-Push sent");
-      } catch (e) {
-        console.error("❌ Push failed:", e.message);
-      }
+          // For web push
+          webpush: deviceToken.deviceType === 'web' ? {
+            notification: {
+              icon: '/icon.png',
+              badge: '/badge.png',
+              requireInteraction: true,
+              actions: [
+                { action: 'accept', title: 'Accept' },
+                { action: 'decline', title: 'Decline' }
+              ]
+            },
+            fcmOptions: {
+              link: `${process.env.WEB_URL || 'http://localhost:5173'}/incoming-call`
+            }
+          } : undefined,
+
+          data: {
+            type: "incoming_call",
+            callerName: from,
+            roomName: roomName,
+            guestSocketId: socket.id,
+            uuid: Date.now().toString(),
+            avatar: "https://i.pravatar.cc/300",
+            deviceType: deviceToken.deviceType
+          },
+        };
+
+        try {
+          await admin.messaging().send(message);
+          console.log(`✅ Notification sent to ${deviceToken.deviceType} device: ${deviceToken.deviceId}`);
+          return { success: true, deviceId: deviceToken.deviceId };
+        } catch (e) {
+          console.error(`❌ Failed to send to ${deviceToken.deviceType} (${deviceToken.deviceId}):`, e.message);
+          return { success: false, deviceId: deviceToken.deviceId, error: e.message };
+        }
+      });
+
+      await Promise.all(notificationPromises);
     }
   });
 
@@ -146,6 +170,45 @@ io.on("connection", (socket) => {
     io.to(guestSocketId).emit("call-accepted", {
       roomName,
       peerSocketId: socket.id,
+    });
+  });
+
+  // NEW: When a call is answered on one device, cancel on all others
+  socket.on("call-answered", async ({ userId, callUuid }) => {
+    console.log("📞 call-answered:", { userId, callUuid, answeredBy: socket.id });
+    
+    // Get user's all devices
+    const user = await User.findById(userId);
+    if (user && user.fcmTokens) {
+      // Send cancellation message to all devices
+      const cancelPromises = user.fcmTokens.map(async (deviceToken) => {
+        try {
+          await admin.messaging().send({
+            token: deviceToken.token,
+            data: {
+              type: "call_cancelled",
+              reason: "answered_on_another_device",
+              uuid: callUuid || "",
+            },
+          });
+          console.log(`✅ Cancellation sent to ${deviceToken.deviceType}: ${deviceToken.deviceId}`);
+        } catch (e) {
+          console.error(`❌ Failed to cancel on ${deviceToken.deviceType}:`, e.message);
+        }
+      });
+      
+      await Promise.all(cancelPromises);
+    }
+
+    // Also emit to all connected sockets for this user (for foreground apps)
+    const userSocketEntries = userSockets.filter(entry => entry.id === userId);
+    userSocketEntries.forEach(entry => {
+      if (entry.socketId !== socket.id) { // Don't send to the device that answered
+        io.to(entry.socketId).emit("call-cancelled", { 
+          reason: "answered_on_another_device",
+          uuid: callUuid 
+        });
+      }
     });
   });
 
