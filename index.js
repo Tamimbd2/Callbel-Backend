@@ -61,11 +61,15 @@ const io = new Server(httpServer, {
 let userSockets = []; // Move outside, so it's shared across all connections
 
 io.on("connection", (socket) => {
+  console.log("🔌 New socket connection:", socket.id);
+  
   socket.on("register", (userId) => {
+    console.log("📝 User registering:", { userId, socketId: socket.id });
     // Remove any previous socket entry for this user
     userSockets = userSockets.filter((user) => user.id !== userId);
     // Add new socket
     userSockets.push({ id: userId, socketId: socket.id });
+    console.log("👥 Active users:", userSockets.length);
     // Broadcast updated users (without socketId exposed)
     io.emit(
       "users",
@@ -75,22 +79,15 @@ io.on("connection", (socket) => {
 
   // Guest calls registered user
   socket.on("guest-call", async ({ from, to, roomName, fcmToken }) => {
+    console.log("📞 guest-call received:", { from, to, roomName, socketId: socket.id });
+    
     const target = userSockets.find((entry) => entry.id === to);
-
-    if (target) {
-      // Notify registered user about incoming call via Socket.IO
-      io.to(target.socketId).emit("incoming-call", {
-        from: { name: from, guest: true, socketId: socket.id },
-        roomName,
-      });
-    }
-
-    // 🔔 PUSH NOTIFICATION (ONLY ADDITION)
-  socket.on("guest-call", async ({ from, to, roomName, fcmToken }) => {
-    const target = userSockets.find((entry) => entry.id === to);
+    console.log("🔍 Target user lookup:", target ? `Found: ${target.socketId}` : "Not found (offline)");
 
     // 1. Notify via Socket (Foreground)
     if (target) {
+      // Notify registered user about incoming call via Socket.IO
+      console.log(`✅ Emitting incoming-call to socket ${target.socketId}`);
       io.to(target.socketId).emit("incoming-call", {
         from: { name: from, guest: true, socketId: socket.id },
         roomName,
@@ -101,7 +98,7 @@ io.on("connection", (socket) => {
     const receiver = await User.findById(to);
 
     if (!receiver || !receiver.fcmToken) {
-      console.log("❌ Push skipped: No FCM token");
+      console.log("❌ Push skipped: No FCM token for user", to);
     } else {
       
       // ✅ CHANGED: Data-Only Payload structure for Full Screen Intent
@@ -138,6 +135,7 @@ io.on("connection", (socket) => {
 
   // Registered user accepts the call
   socket.on("call-accepted", ({ roomName, guestSocketId }) => {
+    console.log("✅ call-accepted:", { roomName, guestSocketId, acceptedBy: socket.id });
     io.to(guestSocketId).emit("call-accepted", {
       roomName,
       peerSocketId: socket.id,
@@ -146,6 +144,7 @@ io.on("connection", (socket) => {
 
   // Registered user declines call
   socket.on("call-declined", ({ guestSocketId }) => {
+    console.log("❌ call-declined:", { guestSocketId, declinedBy: socket.id });
     // Send decline event back to the guest
     io.to(guestSocketId).emit("call-declined");
   });
@@ -171,10 +170,15 @@ io.on("connection", (socket) => {
 
   // Handle disconnect
   socket.on("disconnect", () => {
+    console.log("🔌 Socket disconnected:", socket.id);
     const index = userSockets.findIndex(
       (entry) => entry.socketId === socket.id
     );
-    if (index !== -1) userSockets.splice(index, 1);
+    if (index !== -1) {
+      console.log("👋 User left:", userSockets[index].id);
+      userSockets.splice(index, 1);
+    }
+    console.log("👥 Active users:", userSockets.length);
 
     io.emit(
       "users",

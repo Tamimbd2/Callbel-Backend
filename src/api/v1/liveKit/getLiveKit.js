@@ -1,5 +1,5 @@
 const { AccessToken } = require("livekit-server-sdk");
-const LiveKit = require("../../../models/LiveKit");
+const LiveKit = require("../../../models/LliveKit");
 
 const getLiveKit = async (req, res, next) => {
   try {
@@ -41,12 +41,19 @@ const getLiveKit = async (req, res, next) => {
       canSubscribe: true,
     });
 
-    // Generate JWT
-    const jwt = token.toJwt();
+    // Generate JWT and ensure it's a string
+    const jwt = await token.toJwt();
+    const jwtString = String(jwt);
+    
+    console.log("✅ [BACKEND] Generated LiveKit token for:", username);
+    console.log("   Room:", roomName);
+    console.log("   Identity:", identity);
+    console.log("   Token type:", typeof jwtString);
+    console.log("   Token length:", jwtString.length);
 
-    // Respond with token
+    // Respond with token as string
     return res.status(200).json({
-      token: jwt,
+      token: jwtString,
       identity,
     });
   } catch (error) {
