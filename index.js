@@ -101,17 +101,24 @@ io.on("connection", (socket) => {
       console.log("❌ Push skipped: No FCM token for user", to);
     } else {
       
-      // ✅ CHANGED: Data-Only Payload structure for Full Screen Intent
+      // ✅ UPDATED: Include both notification and data for better handling
       const message = {
         token: receiver.fcmToken,
 
-        // ❌ REMOVED: notification: { title: "...", body: "..." } 
-        // We remove this so Android doesn't show a system tray notification automatically.
-        // This allows the Flutter background handler to wake the app and show the Call UI.
+        // ✅ Notification shown in system tray (tappable)
+        notification: {
+          title: "📞 Incoming Call",
+          body: `${from} is calling...`,
+        },
 
         android: {
           priority: "high",
           ttl: 0, // 0 = Deliver immediately or drop (don't ring 20 mins later)
+          notification: {
+            channelId: "call_channel", // Must match the Android channel created in Flutter
+            priority: "max",
+            defaultVibrateTimings: true,
+          }
         },
 
         data: {
