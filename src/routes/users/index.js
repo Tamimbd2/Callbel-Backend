@@ -5,6 +5,7 @@ const getUserData = require("../../api/v1/users/getUser");
 const getWebsiteData = require("../../api/v1/users/getWebsiteData");
 const updateUserData = require("../../api/v1/users/updateUserData");
 const saveFcmToken = require("../../api/v1/users/saveFcmToken");
+const removeFcmToken = require("../../api/v1/users/removeFcmToken");
 
 const router = require("express").Router();
 
@@ -15,5 +16,6 @@ router.get("/website", getWebsiteData);
 router.post('/contact', createContact)
 router.get('/liveKit', getLiveKitData)
 router.post('/save-fcm-token', saveFcmToken)
+router.post('/remove-fcm-token', removeFcmToken)
 
 module.exports = router;
